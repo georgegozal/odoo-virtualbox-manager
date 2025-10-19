@@ -1,0 +1,52 @@
+# Odoo VirtualBox Manager - Requirements
+
+## System Dependencies
+
+This project uses system-level commands that must be installed separately.
+
+### Required System Packages
+
+#### Ubuntu/Debian:
+```bash
+sudo apt update
+sudo apt install sshpass openssh-client
+```
+
+#### Fedora/RHEL:
+```bash
+sudo dnf install sshpass openssh-clients
+```
+
+#### Arch Linux:
+```bash
+sudo pacman -S sshpass openssh
+```
+
+---
+
+## Python Dependencies
+
+This project uses only Python standard library modules:
+- `subprocess` (built-in)
+- `sys` (built-in)
+
+**No additional Python packages required.**
+
+---
+
+### Check System Dependencies:
+```bash
+# Verify sshpass
+which sshpass
+sshpass -V
+
+# Verify ssh
+which ssh
+ssh -V
+```
+
+
+## Notes
+
+- **sshpass**: Used for password-based SSH authentication. Not required if using SSH keys.
+- **Network**: Requires VM in Bridged Adapter mode

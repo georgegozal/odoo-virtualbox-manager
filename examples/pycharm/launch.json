@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Odoo Remote Debug (VirtualBox)",
+        "type": "python",
+        "request": "attach",
+        "connect": {
+          "host": "odoo-vm",
+          "port": 5678
+        },
+        "pathMappings": [
+          {
+            "localRoot": "${workspaceFolder}",
+            "remoteRoot": "/mnt/odoo11/odoo"
+          }
+        ],
+        "justMyCode": false
+      }
+    ]
+  }
