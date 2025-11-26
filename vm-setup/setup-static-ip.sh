@@ -47,7 +47,7 @@ echo "   Gateway: $GATEWAY"
 echo ""
 
 # Network prefix გამოთვლა (192.168.1.x → 192.168.1)
-NETWORK_PREFIX=$(echo $GATEWAY | cut -d'.' -f1-3)
+NETWORK_PREFIX=$(echo $CURRENT_IP | cut -d'.' -f1-3)
 NEW_IP="${NETWORK_PREFIX}.101"
 
 echo "🎯 New static IP will be: $NEW_IP"
