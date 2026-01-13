@@ -6,25 +6,29 @@
 # - no default DB; -d optional
 # - safe argv handling (no eval)
 # - robust PID detection (lsof → fuser → ss/netstat)
+#
+# NEW:
+# - default runs detached in screen (so multiple instances can run)
+# - use --logs to run in foreground (show logs in terminal)
+# - detached mode logs to ~/.odoo/logs/<session>.log
 # ------------------------------------------------------
 
+set -Eeuo pipefail
+IFS=$'\n\t'
+
 # === Load .env file if present ===
-ENV_FILE="$~/.env"
+ENV_FILE="$HOME/.env"
 if [[ -f "$ENV_FILE" ]]; then
-  echo "🌍 Loading environment variables from $ENV_FILE"
-  # export every non-commented line (handles VAR=VALUE form)
+  echo "Loading environment variables from $ENV_FILE"
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
   set +a
 fi
 
-set -Eeuo pipefail
-IFS=$'\n\t'
-
 # === Paths ===
-ODOO_DIR="/mnt/odoo11/odoo"
-CONF_DIR="/mnt/odoo11/conf"
+ODOO_DIR="/home/odoo/.odoo"
+CONF_DIR="/home/odoo/odoo"
 DEFAULT_CONF="odoo_vb.conf"
 PYTHON="/home/odoo/.venv/bin/python3.7"
 
@@ -35,8 +39,13 @@ DEV_MODE=""
 DEBUG_MODE=false
 CONF_FILE=""
 
+# Logging / detach defaults
+LOGS_MODE=false                  # when true => foreground
+LOG_DIR="$HOME/.odoo/logs"
+
 usage() {
-  echo "Usage: $0 [-d dbname] [-u modules] [--dev mode] [--debug] [-c config_name_or_path]"
+  echo "Usage: $0 [-d dbname] [-u modules] [--dev mode] [--debug] [-c config_name_or_path] [--logs]"
+  echo "  --logs   Run in foreground (do not detach). Default is detached via screen."
 }
 
 # --- Helpers ---
@@ -97,28 +106,28 @@ stop_odoo_targeted() {
 
   local targets=""
   if [[ -n "$port" ]]; then
-    echo "🛑 Stopping instance listening on port: $port"
+    echo "Stopping instance listening on port: $port"
     targets=$(pids_listen_on_port "$port" || true)
   fi
   if [[ -z "$targets" ]]; then
-    echo "🛑 Port match not found (or no port). Falling back to config match."
+    echo "Port match not found (or no port). Falling back to config match."
     targets=$(pids_matching_conf "$conf_real" || true)
   fi
   if [[ -z "$targets" ]]; then
-    echo "ℹ️  No running Odoo process matched this instance."
+    echo "No running Odoo process matched this instance."
     return 0
   fi
 
-  echo "   Target PIDs: $targets"
+  echo "Target PIDs: $targets"
   while read -r pid; do [[ -n "$pid" ]] && kill -15 "$pid" 2>/dev/null || true; done <<< "$targets"
   sleep 2
   local still=""
   still=$(printf "%s\n" "$targets" | xargs -r -n1 -I{} sh -c 'kill -0 {} 2>/dev/null && echo {}' | tr '\n' ' ')
   if [[ -n "$still" ]]; then
-    echo "   Force killing: $still"
+    echo "Force killing: $still"
     printf "%s\n" $still | xargs -r -n1 kill -9 2>/dev/null || true
   fi
-  echo "✅ Instance processes stopped"
+  echo "Instance processes stopped"
 }
 
 # === Parse args ===
@@ -128,6 +137,7 @@ while [[ $# -gt 0 ]]; do
     -d)       [[ $# -ge 2 ]] || { echo "❌ -d requires value"; usage; exit 1; }; DB_NAME="$2"; shift 2;;
     --dev)    [[ $# -ge 2 ]] || { echo "❌ --dev requires value"; usage; exit 1; }; DEV_MODE="$2"; shift 2;;
     --debug)  DEBUG_MODE=true; shift;;
+    --logs)   LOGS_MODE=true; shift;;
     -c|--config)
               [[ $# -ge 2 ]] || { echo "❌ $1 requires value"; usage; exit 1; }
               CONF_FILE="$2"; shift 2;;
@@ -145,7 +155,7 @@ cd "$ODOO_DIR"
 # --- Resolve config (CONF_DIR + name, or absolute) ---
 if [[ -z "$CONF_FILE" ]]; then
   CONF_FILE="$DEFAULT_CONF"
-  echo "⚠️  Config not provided, using default: $CONF_FILE"
+  echo "Config not provided, using default: $CONF_FILE"
 fi
 CONF_FILE=$(normalize_conf_path "$CONF_FILE")
 [[ -f "$CONF_FILE" ]] || {
@@ -154,14 +164,14 @@ CONF_FILE=$(normalize_conf_path "$CONF_FILE")
   ls -1 "$CONF_DIR"/*.conf "$CONF_DIR"/*.cfg 2>/dev/null || echo "  (none)"
   exit 1
 }
-echo "✅ Using config: $CONF_FILE"
+echo "Using config: $CONF_FILE"
 
 # --- Parse port & stop only this instance ---
 PORT="$(get_port_from_conf "$CONF_FILE" || true)"
 if [[ -n "$PORT" ]]; then
-  echo "🔎 Parsed port from config: $PORT"
+  echo "Parsed port from config: $PORT"
 else
-  echo "🔎 No port set in config; default 8069 may apply."
+  echo "No port set in config; default 8069 may apply."
 fi
 stop_odoo_targeted "$CONF_FILE" "${PORT:-}"
 
@@ -174,26 +184,73 @@ fi
 # --- Build command ---
 CMD=( "$PYTHON" "odoo-bin" "-c" "$CONF_FILE" )
 [[ -n "$DB_NAME" ]] && CMD+=( "-d" "$DB_NAME" )
-[[ -n "$MODULES" ]] && { echo "🔄 Updating modules: $MODULES"; CMD+=( "-u" "$MODULES" ); }
+[[ -n "$MODULES" ]] && { echo "Updating modules: $MODULES"; CMD+=( "-u" "$MODULES" ); }
 if [[ -n "$DEV_MODE" ]]; then
-  echo "🚀 Dev mode: --dev=$DEV_MODE"
+  echo "Dev mode: --dev=$DEV_MODE"
   CMD+=( "--dev=$DEV_MODE" )
 else
-  [[ -z "$MODULES" ]] && { echo "🚀 Dev mode default: --dev=xml"; CMD+=( "--dev=xml" ); }
+  [[ -z "$MODULES" ]] && { echo "Dev mode default: --dev=xml"; CMD+=( "--dev=xml" ); }
 fi
 
 # --- Debug wrapper ---
 if [[ "$DEBUG_MODE" == true ]]; then
-  echo "🐛 Debug mode enabled (debugpy :5678)"
+  echo "Debug mode enabled (debugpy :5678)"
   "$PYTHON" -m pip install debugpy --quiet >/dev/null 2>&1 || true
   CMD=( "$PYTHON" "-m" "debugpy" "--listen" "0.0.0.0:5678" "--wait-for-client" "odoo-bin" "-c" "$CONF_FILE" )
   [[ -n "$DB_NAME" ]] && CMD+=( "-d" "$DB_NAME" )
   [[ -n "$MODULES" ]] && CMD+=( "-u" "$MODULES" )
-  if [[ -n "$DEV_MODE" ]]; then CMD+=( "--dev=$DEV_MODE" ); else [[ -z "$MODULES" ]] && CMD+=( "--dev=xml" ); fi
+  if [[ -n "$DEV_MODE" ]]; then
+    CMD+=( "--dev=$DEV_MODE" )
+  else
+    [[ -z "$MODULES" ]] && CMD+=( "--dev=xml" )
+  fi
 fi
 
+# --- Session/log naming ---
+mkdir -p "$LOG_DIR"
+
+CONF_BASE="$(basename "$CONF_FILE")"
+CONF_STEM="${CONF_BASE%.*}"
+SESSION_NAME="${CONF_STEM}"
+
+LOG_FILE="$LOG_DIR/${SESSION_NAME}.log"
+
 # --- Run ---
-printf '📝 Executing: '
+printf 'Executing: '
 for tok in "${CMD[@]}"; do printf '%q ' "$tok"; done
 echo -e "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-exec "${CMD[@]}"
+
+if [[ "$LOGS_MODE" == true ]]; then
+  # Foreground mode: show output in terminal
+  exec "${CMD[@]}" >"${LOG_FILE}" 2>&1
+else
+  # Detached mode: run inside screen, log to file
+  if ! command -v screen >/dev/null 2>&1; then
+    echo "❌ screen is not installed. Install it: sudo apt-get install -y screen"
+    exit 1
+  fi
+
+  # Build a safely-quoted command string
+  printf -v CMD_STR '%q ' "${CMD[@]}"
+
+  echo "Starting detached screen session: $SESSION_NAME"
+  echo "Logging to: $LOG_FILE"
+  echo "View logs:   tail -f '$LOG_FILE'"
+  echo "Attach:      screen -r '$SESSION_NAME'"
+  echo "Sessions:    screen -ls"
+
+  # Start detached; also load ~/.env inside screen shell so variables exist there too
+  screen -dmS "$SESSION_NAME" bash -lc "
+    set -Eeuo pipefail
+    ENV_FILE=\"\$HOME/.env\"
+    if [[ -f \"\$ENV_FILE\" ]]; then
+      set -a
+      source \"\$ENV_FILE\"
+      set +a
+    fi
+   
+   exec $CMD_STR 2>&1 | tee "${LOG_FILE}"
+  "
+
+  exit 0
+fi
