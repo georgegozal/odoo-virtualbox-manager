@@ -1,0 +1,4 @@
+[submodule "home"]
+	path = home
+	url = https://github.com/georgegozal/odoo-virtualbox-manager-home.git
+	branch = master
